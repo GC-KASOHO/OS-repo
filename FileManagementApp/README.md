@@ -75,8 +75,6 @@ This project aims to create a file management application with features such as 
 ---
 
 ## 3. Programming (Front-End)  
-**Leader: Daniel**  
-**Members: Edriane, Kevin, Gerald, Michael**
 
 ### 3.1 Windows GUI Interface (`FileManagerGUI.ps1`)  
 - **Assigned to: Kirby**
