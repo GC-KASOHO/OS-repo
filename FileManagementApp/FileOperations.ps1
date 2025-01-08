@@ -10,7 +10,7 @@ $form.StartPosition = "CenterScreen"
 # Create ListView for drives and files
 $listView = New-Object System.Windows.Forms.ListView
 $listView.Location = New-Object System.Drawing.Point(10, 40)
-$listView.Size = New-Object System.Drawing.Size(760, 500)
+$listView.Size = New-Object System.Drawing.Size(500, 500)  # Adjust size so there's space for preview
 $listView.View = [System.Windows.Forms.View]::Details
 $listView.FullRowSelect = $true
 $listView.GridLines = $true
@@ -27,6 +27,13 @@ $backButton.Location = New-Object System.Drawing.Point(680, 10)
 $backButton.Size = New-Object System.Drawing.Size(90, 20)
 $backButton.Text = "Back"
 $backButton.Enabled = $false
+
+# Create PictureBox for image preview (move to the right side)
+$imagePreview = New-Object System.Windows.Forms.PictureBox
+$imagePreview.Location = New-Object System.Drawing.Point(520, 40)  # Move it to the right side
+$imagePreview.Size = New-Object System.Drawing.Size(250, 250)      # Adjust the size if needed
+$imagePreview.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
+$imagePreview.Visible = $false  # Hide by default
 
 # Initialize columns for drive view
 $driveColumns = @(
@@ -45,155 +52,6 @@ $fileColumns = @(
     @{Name="Size"; Width=120},
     @{Name="Modified Date"; Width=200}
 )
-
-# Create context menus
-$driveContextMenu = New-Object System.Windows.Forms.ContextMenuStrip
-$fileContextMenu = New-Object System.Windows.Forms.ContextMenuStrip
-$folderContextMenu = New-Object System.Windows.Forms.ContextMenuStrip
-
-# Drive context menu items
-$openDriveMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$openDriveMenuItem.Text = "Open"
-$openDriveMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "Drive") {
-        $drivePath = $selected.Text + "\"
-        Show-Directory $drivePath
-    }
-})
-
-$drivePropMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$drivePropMenuItem.Text = "Properties"
-$drivePropMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "Drive") {
-        $driveRoot = $selected.Text + "\"
-        Start-Process "properties" $driveRoot
-    }
-})
-
-# File context menu items
-$openFileMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$openFileMenuItem.Text = "Open"
-$openFileMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "File") {
-        $filePath = Join-Path $pathBox.Text $selected.Text
-        Start-Process $filePath
-    }
-})
-
-$openWithFileMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$openWithFileMenuItem.Text = "Open With..."
-$openWithFileMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "File") {
-        $filePath = Join-Path $pathBox.Text $selected.Text
-        Start-Process "rundll32.exe" "shell32.dll,OpenAs_RunDLL $filePath"
-    }
-})
-
-$copyFileMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$copyFileMenuItem.Text = "Copy"
-$copyFileMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "File") {
-        $filePath = Join-Path $pathBox.Text $selected.Text
-        [System.Windows.Forms.Clipboard]::SetText($filePath)
-    }
-})
-
-$deleteFileMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$deleteFileMenuItem.Text = "Delete"
-$deleteFileMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "File") {
-        $filePath = Join-Path $pathBox.Text $selected.Text
-        $result = [System.Windows.Forms.MessageBox]::Show(
-            "Are you sure you want to delete this file?",
-            "Confirm Delete",
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
-        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-            Remove-Item $filePath -Force
-            Show-Directory $pathBox.Text
-        }
-    }
-})
-
-$filePropMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$filePropMenuItem.Text = "Properties"
-$filePropMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "File") {
-        $filePath = Join-Path $pathBox.Text $selected.Text
-        Start-Process "properties" $filePath
-    }
-})
-
-# Folder context menu items
-$openFolderMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$openFolderMenuItem.Text = "Open"
-$openFolderMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "Directory") {
-        $newPath = Join-Path $pathBox.Text $selected.Text
-        Show-Directory $newPath
-    }
-})
-
-$copyFolderMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$copyFolderMenuItem.Text = "Copy Path"
-$copyFolderMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "Directory") {
-        $folderPath = Join-Path $pathBox.Text $selected.Text
-        [System.Windows.Forms.Clipboard]::SetText($folderPath)
-    }
-})
-
-$deleteFolderMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$deleteFolderMenuItem.Text = "Delete"
-$deleteFolderMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "Directory") {
-        $folderPath = Join-Path $pathBox.Text $selected.Text
-        $result = [System.Windows.Forms.MessageBox]::Show(
-            "Are you sure you want to delete this folder and all its contents?",
-            "Confirm Delete",
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
-        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-            Remove-Item $folderPath -Recurse -Force
-            Show-Directory $pathBox.Text
-        }
-    }
-})
-
-$folderPropMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem
-$folderPropMenuItem.Text = "Properties"
-$folderPropMenuItem.Add_Click({
-    $selected = $listView.SelectedItems[0]
-    if ($selected -and $selected.Tag -eq "Directory") {
-        $folderPath = Join-Path $pathBox.Text $selected.Text
-        Start-Process "properties" $folderPath
-    }
-})
-
-# Add items to context menus
-$driveContextMenu.Items.AddRange(@($openDriveMenuItem, $drivePropMenuItem))
-$fileContextMenu.Items.AddRange(@($openFileMenuItem, $openWithFileMenuItem, 
-    (New-Object System.Windows.Forms.ToolStripSeparator),
-    $copyFileMenuItem, $deleteFileMenuItem,
-    (New-Object System.Windows.Forms.ToolStripSeparator),
-    $filePropMenuItem))
-$folderContextMenu.Items.AddRange(@($openFolderMenuItem,
-    (New-Object System.Windows.Forms.ToolStripSeparator),
-    $copyFolderMenuItem, $deleteFolderMenuItem,
-    (New-Object System.Windows.Forms.ToolStripSeparator),
-    $folderPropMenuItem))
 
 # Function to format size
 function Format-Size {
@@ -263,7 +121,7 @@ function Show-Directory {
         $item = New-Object Windows.Forms.ListViewItem($_.Name)
         $item.Tag = "Directory"
         $item.SubItems.Add("Folder")
-        $item.SubItems.Add("")
+        $item.SubItems.Add("N/A")
         $item.SubItems.Add($_.LastWriteTime)
         [void]$listView.Items.Add($item)
     }
@@ -278,6 +136,22 @@ function Show-Directory {
         [void]$listView.Items.Add($item)
     }
 }
+
+# Handle single-click on list view items
+$listView.Add_Click({
+    $selected = $listView.SelectedItems[0]
+    if ($selected -and $selected.Tag -eq "File") {
+        $filePath = Join-Path $pathBox.Text $selected.Text
+        # Preview image if it's an image file
+        $extension = [System.IO.Path]::GetExtension($filePath).ToLower()
+        if ($extension -in @(".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff")) {
+            $imagePreview.Image = [System.Drawing.Image]::FromFile($filePath)
+            $imagePreview.Visible = $true
+        } else {
+            $imagePreview.Visible = $false  # Hide preview for non-image files
+        }
+    }
+})
 
 # Handle double-click
 $listView.Add_DoubleClick({
@@ -339,7 +213,7 @@ $backButton.Add_Click({
 })
 
 # Add controls to form
-$form.Controls.AddRange(@($listView, $pathBox, $backButton))
+$form.Controls.AddRange(@($listView, $pathBox, $backButton, $imagePreview))
 
 # Load drives and show form
 Show-Drives
