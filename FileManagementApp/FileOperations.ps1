@@ -128,7 +128,7 @@ $itemCountLabel.Alignment = [System.Windows.Forms.ToolStripItemAlignment]::Right
 # Initialize navigation history
 $script:navigationHistory = @()
 $script:currentHistoryIndex = -1
-$script:clipboardPath = $null
+$script:clipboardPaths = $null
 $script:clipboardOperation = $null
 
 # Function to format size
@@ -755,7 +755,7 @@ $newFolderMenuItem.Add_Click({
             $form = New-Object System.Windows.Forms.Form
             $form.Text = "New Folder"
             $form.Size = New-Object System.Drawing.Size(300,150)
-            $form.StartPosition = "CenterScreen"
+            $form.StartPosition = "LeftScreen"
 
             $textBox = New-Object System.Windows.Forms.TextBox
             $textBox.Location = New-Object System.Drawing.Point(10,20)
