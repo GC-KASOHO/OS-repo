@@ -1,3 +1,12 @@
+$commonFolders = @{
+    "Desktop" = [Environment]::GetFolderPath("Desktop")
+    "Documents" = [Environment]::GetFolderPath("MyDocuments")
+    "Downloads" = (Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads")
+    "Pictures" = [Environment]::GetFolderPath("MyPictures")
+    "Music" = [Environment]::GetFolderPath("MyMusic")
+    "Videos" = [Environment]::GetFolderPath("MyVideos")
+}
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Drawing.Common  # Add this line
@@ -8,6 +17,9 @@ $largeImageList = New-Object System.Windows.Forms.ImageList
 $largeImageList.ImageSize = New-Object System.Drawing.Size(48, 48)
 $smallImageList = New-Object System.Windows.Forms.ImageList
 $smallImageList.ImageSize = New-Object System.Drawing.Size(16, 16)
+
+$script:iconCache = @{}
+$script:folderIcon = $null
 
 # Create main form
 $form = New-Object System.Windows.Forms.Form
@@ -54,15 +66,14 @@ $propertiesMenuItem = $toolsMenu.DropDownItems.Add("Properties")
 # Create ToolStrip
 $toolStrip = New-Object System.Windows.Forms.ToolStrip
 $backButton = New-Object System.Windows.Forms.ToolStripButton
-$backButton.Image = [System.Drawing.SystemIcons]::ArrowShortLeft.ToBitmap()
-$backButton.Text = "Back"
+$backButton.Text = "←"
+$backButton.Font = New-Object System.Drawing.Font("Arial", 14, [System.Drawing.FontStyle]::Bold)
+$backButton.ToolTipText = "Back"
 $forwardButton = New-Object System.Windows.Forms.ToolStripButton
-$forwardButton.Image = [System.Drawing.SystemIcons]::ArrowShortRight.ToBitmap()
-$forwardButton.Text = "Forward"
-$upButton = New-Object System.Windows.Forms.ToolStripButton
-$upButton.Image = [System.Drawing.SystemIcons]::WinLogo.ToBitmap()
-$upButton.Text = "Up"
-[void]$toolStrip.Items.AddRange(@($backButton, $forwardButton, $upButton))
+$forwardButton.Text = "→"
+$forwardButton.Font = New-Object System.Drawing.Font("Arial", 14, [System.Drawing.FontStyle]::Bold)
+$forwardButton.ToolTipText = "Forward"
+[void]$toolStrip.Items.AddRange(@($backButton, $forwardButton))
 
 # Create address bar
 $addressBar = New-Object System.Windows.Forms.ToolStripTextBox
@@ -132,52 +143,60 @@ $script:clipboardPaths = $null
 $script:clipboardOperation = $null
 
 # Function to format size
-function Format-Size {
-    param([long]$size)
-    if ($size -gt 1TB) { return "{0:N2} TB" -f ($size / 1TB) }
-    if ($size -gt 1GB) { return "{0:N2} GB" -f ($size / 1GB) }
-    if ($size -gt 1MB) { return "{0:N2} MB" -f ($size / 1MB) }
-    if ($size -gt 1KB) { return "{0:N2} KB" -f ($size / 1KB) }
-    return "{0} Bytes" -f $size
+function Initialize-ImageLists {
+    # Initialize image lists if not already done
+    if (-not $script:folderIcon) {
+        $script:folderIcon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\Windows\System32\shell32.dll")
+    }
+    
+    # Clear existing images
+    $largeImageList.Images.Clear()
+    $smallImageList.Images.Clear()
+    
+    # Add folder icon
+    $largeImageList.Images.Add("folder", $script:folderIcon)
+    $smallImageList.Images.Add("folder", $script:folderIcon)
+    
+    # Add default file icon
+    $defaultIcon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\Windows\System32\notepad.exe")
+    $largeImageList.Images.Add("file", $defaultIcon)
+    $smallImageList.Images.Add("file", $defaultIcon)
 }
 
-function Get-FileIcon {
+function Get-FileIconIndex {
     param (
-        [string]$filePath,
-        [bool]$large = $true
+        [string]$filePath
     )
     
     try {
-        $shell = New-Object -ComObject Shell.Application
-        $folderObject = $shell.Namespace((Split-Path $filePath))
-        $fileObject = $folderObject.ParseName((Split-Path $filePath -Leaf))
+        $extension = [System.IO.Path]::GetExtension($filePath)
         
-        if ($large) {
-            $iconSize = 0x4 # SHGFI_LARGEICON
-        } else {
-            $iconSize = 0x1 # SHGFI_SMALLICON
+        # Return cached icon index if available
+        if ($script:iconCache.ContainsKey($extension)) {
+            return $script:iconCache[$extension]
         }
         
-        $bitmap = $null
-        try {
-            # For image files, try to get thumbnail
-            if ($filePath -match '\.(jpg|jpeg|png|gif|bmp)$') {
-                $image = [System.Drawing.Image]::FromFile($filePath)
-                $size = if ($large) { 32 } else { 16 }
-                $bitmap = New-Object System.Drawing.Bitmap($image, $size, $size)
-                $image.Dispose()
-            }
-        }
-        catch {
-            # If thumbnail creation fails, fall back to icon
-            $bitmap = $fileObject.IconLocation
+        # If it's a folder, return folder icon
+        if ((Get-Item $filePath) -is [System.IO.DirectoryInfo]) {
+            return 0  # Index of folder icon
         }
         
-        return $bitmap
+        # Get icon for the file type
+        $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($filePath)
+        if ($icon) {
+            $index = $largeImageList.Images.Count
+            $largeImageList.Images.Add($extension, $icon)
+            $smallImageList.Images.Add($extension, $icon)
+            $script:iconCache[$extension] = $index
+            return $index
+        }
     }
     catch {
-        return $null
+        # Return default file icon on error
+        return 1  # Index of default file icon
     }
+    
+    return 1  # Default to file icon
 }
 
 # Function to populate TreeView
@@ -185,14 +204,41 @@ function Update-TreeView {
     param([string]$selectedPath)
     
     $treeView.Nodes.Clear()
-    $drives = Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DriveType -eq 3 }
     
-    foreach ($drive in $drives) {
-        $driveNode = $treeView.Nodes.Add($drive.DeviceID, $drive.DeviceID)
-        $driveNode.Tag = $drive.DeviceID + "\"
-        if ($selectedPath -and $selectedPath.StartsWith($drive.DeviceID)) {
-            Expand-TreeNode $driveNode $selectedPath
+    try {
+        # Add My Device (This PC) node
+        $myDeviceNode = $treeView.Nodes.Add("My Device")
+        $myDeviceNode.Tag = "MyDevice"
+        
+        # Add common folders
+        foreach ($folder in $commonFolders.GetEnumerator()) {
+            if ($folder.Key -ne "My Device" -and (Test-Path $folder.Value)) {
+                $folderNode = $myDeviceNode.Nodes.Add($folder.Key)
+                $folderNode.Tag = $folder.Value
+                # Add dummy node to enable expansion
+                [void]$folderNode.Nodes.Add("dummy")
+            }
         }
+        
+        # Add drives
+        $drives = Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DriveType -eq 3 }
+        foreach ($drive in $drives) {
+            $driveNode = $myDeviceNode.Nodes.Add("$($drive.DeviceID) ($($drive.VolumeName))")
+            $driveNode.Tag = $drive.DeviceID + "\"
+            # Add dummy node to enable expansion
+            [void]$driveNode.Nodes.Add("dummy")
+        }
+        
+        if ($selectedPath) {
+            $node = FindNodeByPath $treeView.Nodes $selectedPath
+            if ($node) {
+                $node.Expand()
+                $treeView.SelectedNode = $node
+            }
+        }
+    }
+    catch {
+        Write-Warning "Error updating TreeView: $_"
     }
 }
 
@@ -221,255 +267,239 @@ function Get-ImageThumbnail {
         [int]$size = 48
     )
     
+    $image = $null
+    $thumbnail = $null
+    $graphics = $null
+    
     try {
         if (Test-Path $imagePath) {
-            $image = [System.Drawing.Image]::FromFile($imagePath)
-            $thumbnail = New-Object System.Drawing.Bitmap($size, $size)
+            # Create FileStream to properly handle file access
+            $stream = [System.IO.File]::OpenRead($imagePath)
+            $image = [System.Drawing.Image]::FromStream($stream)
+            
+            # Validate image
+            if ($image -eq $null) { throw "Invalid image format" }
+            
+            # Create new bitmap with proper pixel format
+            $thumbnail = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
             $graphics = [System.Drawing.Graphics]::FromImage($thumbnail)
             $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
             
-            # Calculate dimensions to maintain aspect ratio
+            # Calculate dimensions
             $ratio = [Math]::Min($size / $image.Width, $size / $image.Height)
             $newWidth = [Math]::Floor($image.Width * $ratio)
             $newHeight = [Math]::Floor($image.Height * $ratio)
             $x = ($size - $newWidth) / 2
             $y = ($size - $newHeight) / 2
             
-            $graphics.DrawImage($image, $x, $y, $newWidth, $newHeight)
-            $graphics.Dispose()
-            $image.Dispose()
+            # Create rectangle for drawing
+            $destRect = New-Object System.Drawing.Rectangle($x, $y, $newWidth, $newHeight)
+            $srcRect = New-Object System.Drawing.Rectangle(0, 0, $image.Width, $image.Height)
+            
+            # Draw image
+            $graphics.DrawImage($image, $destRect, $srcRect, [System.Drawing.GraphicsUnit]::Pixel)
+            
             return $thumbnail
         }
     }
     catch {
+        Write-Warning "Error creating thumbnail: $_"
         return $null
     }
+    finally {
+        # Proper resource cleanup
+        if ($graphics) { $graphics.Dispose() }
+        if ($image) { $image.Dispose() }
+        if ($stream) { $stream.Dispose() }
+        # Don't dispose thumbnail here as it's being returned
+    }
 }
 
-# Modify the Update-ListView function to handle icons
-function Update-ListView {
-    param([string]$path)
+function FindNodeByPath {
+    param($nodes, $path)
     
-    $listView.Items.Clear()
-    $largeImageList.Images.Clear()
-    $smallImageList.Images.Clear()
-    if (-not $path) { return }
-    
-    try {
-        $items = Get-ChildItem -Path $path -ErrorAction Stop
-        if (-not $showHiddenMenuItem.Checked) {
-            $items = $items | Where-Object { -not $_.Attributes.HasFlag([System.IO.FileAttributes]::Hidden) }
+    foreach ($node in $nodes) {
+        if ($node.Tag -eq $path) {
+            return $node
         }
-        
-        $imageIndex = 0
-        foreach ($item in $items) {
-            $listItem = $listView.Items.Add($item.Name)
-            $listItem.SubItems.Add($item.LastWriteTime.ToString("g"))
-            
-            if ($item.PSIsContainer) {
-                $listItem.SubItems.Add("Folder")
-                $listItem.SubItems.Add("")
-                # Use folder icon
-                $folderIcon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\Windows\System32\shell32.dll")
-                $largeImageList.Images.Add($folderIcon.ToBitmap())
-                $smallImageList.Images.Add($folderIcon.ToBitmap())
+        if ($node.Nodes.Count -gt 0) {
+            $result = FindNodeByPath $node.Nodes $path
+            if ($result) {
+                return $result
             }
-            else {
-                $listItem.SubItems.Add($item.Extension)
-                $listItem.SubItems.Add((Format-Size $item.Length))
-                
-                # Handle image files
-                if ($item.Extension -match '\.(jpg|jpeg|png|gif|bmp)$') {
-                    $thumbnail = Get-ImageThumbnail -imagePath $item.FullName
-                    if ($thumbnail) {
-                        $largeImageList.Images.Add($thumbnail)
-                        $smallImageList.Images.Add($thumbnail)
-                    }
-                    else {
-                        # Fallback to file icon if thumbnail creation fails
-                        $icon = Get-FileIcon -filePath $item.FullName -large $true
-                        $largeImageList.Images.Add($icon)
-                        $smallImageList.Images.Add($icon)
-                    }
-                }
-                else {
-                    # Get icon for non-image files
-                    $icon = Get-FileIcon -filePath $item.FullName -large $true
-                    if ($icon) {
-                        $largeImageList.Images.Add($icon)
-                        $smallImageList.Images.Add($icon)
-                    }
-                }
-            }
-            
-            $listItem.ImageIndex = $imageIndex
-            $imageIndex++
-            $listItem.Tag = $item.FullName
         }
     }
-    catch {
-        $statusLabel.Text = "Error: $_"
-    }
-    
-    $itemCountLabel.Text = "$($listView.Items.Count) items"
-    $addressBar.Text = $path
+    return $null
 }
 
-# Function to update ListView
-function Update-ListView {
-    param([string]$path)
+# Modified Update-TreeView function with improved error handling
+function Update-TreeView {
+    param([string]$selectedPath)
     
-    $listView.Items.Clear()
-    $largeImageList.Images.Clear()
-    $smallImageList.Images.Clear()
-    if (-not $path) { return }
-    
+    $treeView.Nodes.Clear()
     try {
-        $items = Get-ChildItem -Path $path -ErrorAction Stop
-        if (-not $showHiddenMenuItem.Checked) {
-            $items = $items | Where-Object { -not $_.Attributes.HasFlag([System.IO.FileAttributes]::Hidden) }
-        }
+        $drives = Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DriveType -eq 3 }
         
-        $imageIndex = 0
-        foreach ($item in $items) {
-            $listItem = $listView.Items.Add($item.Name)
-            $listItem.SubItems.Add($item.LastWriteTime.ToString("g"))
+        foreach ($drive in $drives) {
+            $driveNode = $treeView.Nodes.Add($drive.DeviceID, $drive.DeviceID)
+            $driveNode.Tag = $drive.DeviceID + "\"
             
-            if ($item.PSIsContainer) {
-                $listItem.SubItems.Add("Folder")
-                $listItem.SubItems.Add("")
-                
-                # Add folder icon
-                try {
-                    $folderIcon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\Windows\System32\shell32.dll")
-                    $largeImageList.Images.Add($folderIcon.ToBitmap())
-                    $smallImageList.Images.Add($folderIcon.ToBitmap())
-                }
-                catch {
-                    $largeImageList.Images.Add([System.Drawing.SystemIcons]::Folder.ToBitmap())
-                    $smallImageList.Images.Add([System.Drawing.SystemIcons]::Folder.ToBitmap())
-                }
-            }
-            else {
-                $listItem.SubItems.Add($item.Extension)
-                $listItem.SubItems.Add((Format-Size $item.Length))
-                
-                # Handle image files
-                if ($item.Extension -match '\.(jpg|jpeg|png|gif|bmp)$') {
+            # Force immediate population of first level
+            try {
+                $folders = Get-ChildItem -Path ($drive.DeviceID + "\") -Directory -ErrorAction Stop
+                foreach ($folder in $folders) {
+                    $folderNode = $driveNode.Nodes.Add($folder.Name)
+                    $folderNode.Tag = $folder.FullName
+                    
+                    # Add a dummy node if there are subfolders
                     try {
-                        $image = [System.Drawing.Image]::FromFile($item.FullName)
-                        $largeThumbnail = New-Object System.Drawing.Bitmap($image, 32, 32)
-                        $smallThumbnail = New-Object System.Drawing.Bitmap($image, 16, 16)
-                        $largeImageList.Images.Add($largeThumbnail)
-                        $smallImageList.Images.Add($smallThumbnail)
-                        $image.Dispose()
+                        if (Get-ChildItem -Path $folder.FullName -Directory -ErrorAction Stop) {
+                            [void]$folderNode.Nodes.Add("dummy")
+                        }
                     }
                     catch {
-                        # Fallback to default icon
-                        $icon = Get-FileIcon -filePath $item.FullName -large $true
-                        $largeImageList.Images.Add($icon)
-                        $smallImageList.Images.Add($icon)
+                        Write-Warning "Could not access subfolders of $($folder.FullName): $_"
                     }
                 }
-                else {
-                    # Get icon for non-image files
-                    $icon = Get-FileIcon -filePath $item.FullName -large $true
-                    $largeImageList.Images.Add($icon)
-                    $smallImageList.Images.Add($icon)
-                }
+            }
+            catch {
+                Write-Warning "Could not access drive $($drive.DeviceID): $_"
+                continue
             }
             
-            $listItem.ImageIndex = $imageIndex
-            $imageIndex++
+            if ($selectedPath -and $selectedPath.StartsWith($drive.DeviceID)) {
+                $driveNode.Expand()
+            }
+        }
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Error populating directory tree: $_",
+            "Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+    }
+}
+
+# Add TreeView expansion handler
+$treeView.Add_BeforeExpand({
+    $node = $_.Node
+    
+    if ($node.Nodes.Count -eq 1 -and $node.Nodes[0].Text -eq "dummy") {
+        $node.Nodes.Clear()
+        
+        try {
+            $folders = Get-ChildItem -Path $node.Tag -Directory -ErrorAction Stop
+            foreach ($folder in $folders) {
+                $newNode = $node.Nodes.Add($folder.Name)
+                $newNode.Tag = $folder.FullName
+                
+                # Add dummy node if there are subfolders
+                try {
+                    if (Get-ChildItem -Path $folder.FullName -Directory -ErrorAction Stop) {
+                        [void]$newNode.Nodes.Add("dummy")
+                    }
+                }
+                catch {
+                    Write-Warning "Could not access subfolders of $($folder.FullName): $_"
+                }
+            }
+        }
+        catch {
+            Write-Warning "Could not expand node $($node.Tag): $_"
+            [void]$node.Nodes.Add("(Access Denied)")
+        }
+    }
+})
+
+# Modified ListView update function with better error handling
+function Update-ListView {
+    param([string]$path)
+    
+    $listView.Items.Clear()
+    if (-not $path -or $path -eq "MyDevice") {
+        # Show common folders and drives if we're at My Device
+        foreach ($folder in $commonFolders.GetEnumerator()) {
+            if ($folder.Key -ne "My Device" -and (Test-Path $folder.Value)) {
+                $listItem = $listView.Items.Add($folder.Key)
+                $listItem.SubItems.Add("")  # Modified date
+                $listItem.SubItems.Add("System Folder")
+                $listItem.SubItems.Add("")  # Size
+                $listItem.Tag = $folder.Value
+                $listItem.ImageIndex = 0  # Use folder icon
+            }
+        }
+        
+        # Add drives
+        $drives = Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DriveType -eq 3 }
+        foreach ($drive in $drives) {
+            $listItem = $listView.Items.Add("$($drive.DeviceID) ($($drive.VolumeName))")
+            $listItem.SubItems.Add("")
+            $listItem.SubItems.Add("Drive")
+            $listItem.SubItems.Add((Format-Size $drive.Size))
+            $listItem.Tag = $drive.DeviceID + "\"
+            $listItem.ImageIndex = 0  # Use folder icon
+        }
+        
+        $addressBar.Text = "My Device"
+        return
+    }
+    
+    # Initialize image lists if needed
+    Initialize-ImageLists
+    
+    try {
+        $items = Get-ChildItem -Path $path -ErrorAction Stop
+        if (-not $showHiddenMenuItem.Checked) {
+            $items = $items | Where-Object { -not $_.Attributes.HasFlag([System.IO.FileAttributes]::Hidden) }
+        }
+        
+        foreach ($item in $items) {
+            $listItem = $listView.Items.Add($item.Name)
+            $listItem.SubItems.Add($item.LastWriteTime.ToString("g"))
+            
+            if ($item.PSIsContainer) {
+                $listItem.SubItems.Add("Folder")
+                $listItem.SubItems.Add("")
+                $listItem.ImageIndex = 0  # Folder icon
+            }
+            else {
+                $listItem.SubItems.Add($item.Extension)
+                $listItem.SubItems.Add((Format-Size $item.Length))
+                $listItem.ImageIndex = (Get-FileIconIndex $item.FullName)
+            }
+            
             $listItem.Tag = $item.FullName
         }
     }
     catch {
-        $statusLabel.Text = "Error: $_"
+        $statusLabel.Text = "Error accessing $path`: $_"
     }
     
     $itemCountLabel.Text = "$($listView.Items.Count) items"
     $addressBar.Text = $path
 }
 
-# Function to update preview
-function Update-Preview {
-    param($path)
-    
-    $previewImage.Image = $null
-    $previewText.Text = ""
-    
-    if (-not $path) { return }
-    
-    try {
-        $item = Get-Item $path
-        if ($item.PSIsContainer) {
-            $previewText.Visible = $true
-            $previewImage.Visible = $false
-            
-            $previewText.Text = "Folder: $($item.Name)`r`n"
-            $previewText.Text += "Created: $($item.CreationTime)`r`n"
-            $previewText.Text += "Modified: $($item.LastWriteTime)`r`n"
-            
-            # Calculate folder size and contents
-            $folderStats = Get-ChildItem $path -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum
-            $previewText.Text += "Size: $((Format-Size $folderStats.Sum))`r`n"
-            $previewText.Text += "Contains: $($folderStats.Count) items"
-        }
-        else {
-            $extension = $item.Extension.ToLower()
-            
-            if ($extension -match '\.(jpg|jpeg|png|gif|bmp)$') {
-                try {
-                    $previewImage.Visible = $true
-                    $previewText.Visible = $true
-                    
-                    # Load and display image
-                    $image = [System.Drawing.Image]::FromFile($path)
-                    $previewImage.Image = $image
-                    
-                    # Show image details
-                    $previewText.Text = "Image Details:`r`n"
-                    $previewText.Text += "Dimensions: $($image.Width) x $($image.Height)`r`n"
-                    $previewText.Text += "Size: $(Format-Size $item.Length)`r`n"
-                    $previewText.Text += "Created: $($item.CreationTime)`r`n"
-                    $previewText.Text += "Modified: $($item.LastWriteTime)"
-                }
-                catch {
-                    $previewText.Text = "Error loading image preview: $_"
-                }
-            }
-            elseif ($extension -in @(".txt", ".log", ".xml", ".json", ".ps1", ".cmd", ".bat", ".html", ".css", ".js")) {
-                $previewImage.Visible = $false
-                $previewText.Visible = $true
-                
-                try {
-                    $content = Get-Content $path -Raw -ErrorAction Stop
-                    if ($content.Length -gt 5000) {
-                        $content = $content.Substring(0, 5000) + "`r`n... (content truncated)"
-                    }
-                    $previewText.Text = $content
-                }
-                catch {
-                    $previewText.Text = "Error loading text preview: $_"
-                }
-            }
-            else {
-                $previewImage.Visible = $false
-                $previewText.Visible = $true
-                
-                $previewText.Text = "File Details:`r`n"
-                $previewText.Text += "Name: $($item.Name)`r`n"
-                $previewText.Text += "Type: $($item.Extension)`r`n"
-                $previewText.Text += "Size: $(Format-Size $item.Length)`r`n"
-                $previewText.Text += "Created: $($item.CreationTime)`r`n"
-                $previewText.Text += "Modified: $($item.LastWriteTime)"
-            }
-        }
+# Add simple error handling for initial load
+try {
+    Update-TreeView
+    $drives = Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DriveType -eq 3 }
+    if ($drives) {
+        $initialDrive = $drives[0].DeviceID + "\"
+        Update-ListView $initialDrive
+        $script:navigationHistory += $initialDrive
+        $script:currentHistoryIndex = 0
     }
-    catch {
-        $previewText.Text = "Error loading preview: $_"
-    }
+}
+catch {
+    [System.Windows.Forms.MessageBox]::Show(
+        "Error initializing file explorer: $_",
+        "Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    )
 }
 
 # Create context menu
@@ -564,43 +594,62 @@ $contextDelete.Add_Click({
     }
 })
 
-# Add Rename option to context menu (add this after other context menu items)
-$contextRename = $contextMenu.Items.Add("Rename")
-$contextRename.ShortcutKeys = "F2"
-
-# Add Rename to Edit menu
-$renameMenuItem = $editMenu.DropDownItems.Add("Rename")
-$renameMenuItem.ShortcutKeys = "F2"
-
 # Rename function
 function Start-Rename {
     if ($listView.SelectedItems.Count -eq 1) {
-        $selectedItem = $listView.SelectedItems[0]
-        $selectedItem.BeginEdit()
+        try {
+            $selectedItem = $listView.SelectedItems[0]
+            $selectedItem.BeginEdit()
+        }
+        catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Error starting rename: $_",
+                "Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+        }
     }
 }
 
-# Add click handlers
+$contextRename = $contextMenu.Items.Add("Rename")
+$contextRename.ShortcutKeys = "F2"
 $contextRename.Add_Click({ Start-Rename })
+
+$renameMenuItem = $editMenu.DropDownItems.Add("Rename")
+$renameMenuItem.ShortcutKeys = "F2"
 $renameMenuItem.Add_Click({ Start-Rename })
+
+# Add F2 key handler to the form if not already present
+$form.Add_KeyDown({
+    param($sender, $e)
+    
+    if ($e.KeyCode -eq 'F2') {
+        Start-Rename
+        $e.Handled = $true
+    }
+})
 
 # Add ListView label edit handlers
 $listView.LabelEdit = $true
+
 $listView.Add_BeforeLabelEdit({
-    $_.CancelEdit = $false
+    param($sender, $e)
+    $e.CancelEdit = $false
 })
 
 $listView.Add_AfterLabelEdit({
-    if ($_.Label -ne $null) {
+    param($sender, $e)
+    if ($e.Label -ne $null) {
         try {
-            $oldPath = $_.Item.Tag
-            $newPath = Join-Path (Split-Path $oldPath) $_.Label
-            Rename-Item -Path $oldPath -NewName $_.Label -ErrorAction Stop
-            $_.Item.Tag = $newPath
+            $oldPath = $listView.SelectedItems[0].Tag
+            $newPath = Join-Path (Split-Path $oldPath) $e.Label
+            Rename-Item -Path $oldPath -NewName $e.Label -ErrorAction Stop
+            $listView.SelectedItems[0].Tag = $newPath
             $statusLabel.Text = "Item renamed successfully"
         }
         catch {
-            $_.CancelEdit = $true
+            $e.CancelEdit = $true
             [System.Windows.Forms.MessageBox]::Show(
                 "Error renaming item: $_",
                 "Error",
@@ -1172,6 +1221,14 @@ $form.Add_FormClosing({
     }
     if ($smallImageList) {
         $smallImageList.Dispose()
+    }
+    if ($script:folderIcon) {
+        $script:folderIcon.Dispose()
+    }
+    foreach ($icon in $script:iconCache.Values) {
+        if ($icon -is [System.Drawing.Icon]) {
+            $icon.Dispose()
+        }
     }
 })
 
